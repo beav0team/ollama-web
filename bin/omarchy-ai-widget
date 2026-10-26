@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# omarchy-ai-widget — open or focus the local chat window.
+#
+# This used to be a floating popup on a special workspace. Hyprland draws no
+# titlebars, so a floating window had nothing to grab and no way to get out of
+# the way; it is now an ordinary tiled window that behaves like every other one
+# (SUPER+Q closes, SUPER+SHIFT+arrow moves it, SUPER+drag resizes).
+#
+# The window is a Chromium *app* window (no tabs, no address bar). Chromium
+# derives its class from the page origin, which is why the class below looks
+# like a hostname — change PORT and the class changes with it.
+export PATH="$HOME/.local/bin:/usr/bin:/bin:$PATH"
+
+# Resolve through symlinks so this works from any clone location.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(dirname "$(dirname "$SELF")")"
+
+PORT=8099
+BASE="http://127.0.0.1:$PORT/"
+URL="$BASE"
+CLASS="brave-127\\.0\\.0\\.1"
+
+exists() {
+    hyprctl clients -j 2>/dev/null |
+        jq -e --arg re "$CLASS" '.[] | select((.class // "") | test($re))' >/dev/null 2>&1
+}
+
+focus() {
+    hyprctl dispatch 'hl.dsp.focus({ window = "class:brave-127.0.0.1__-Default" })' \
+        >/dev/null 2>&1
+}
+
+# 1. the page is served locally; Ollama rejects file:// origins
+if ! curl -sf -o /dev/null --max-time 1 "$BASE"; then
+    setsid "$ROOT/bin/omarchy-ai-server" >/dev/null 2>&1 &
+    for _ in $(seq 25); do
+        curl -sf -o /dev/null --max-time 1 "$BASE" && break
+        sleep 0.2
+    done
+fi
+
+# 2. already open somewhere? bring it to the front, even from another workspace
+if exists; then
+    focus
+    exit 0
+fi
+
+# 3. not running: start it, wait for the window to map, then focus it
+brave-browser --app="$URL" >/dev/null 2>&1 &
+for _ in $(seq 40); do
+    if exists; then
+        sleep 0.2
+        focus
+        exit 0
+    fi
+    sleep 0.25
+done
+
+notify-send -u normal -t 4000 "AI chat" "The window did not open." 2>/dev/null
+exit 1

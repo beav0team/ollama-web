@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ollama</title>
+<script>
+  // ?widget is the small window opened by omarchy-ai-widget. Same page and
+  // same settings, but compact chrome and its own saved conversation, so a
+  // chat in the widget does not leak into the browser tab.
+  if (location.search.includes("widget")) {
+    document.documentElement.classList.add("widget");
+  }
+</script>
+<style>
+  /* Palette lifted from ~/.config/waybar/colors.css (Everforest) so this
+     matches the Hyprland desktop rather than looking like a foreign app. */
+  :root {
+    --bg:      #2d353b;
+    --panel:   #343f44;
+    --panel2:  #3d484d;
+    --fg:      #d3c6aa;
+    --muted:   #9da9a0;
+    --accent:  #a7c080;
+    --accent2: #d699b6;
+    --error:   #e67e80;
+    --border:  rgba(167, 192, 128, 0.28);
+    --mono:    "JetBrains Mono", "Noto Sans Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 16px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0 10px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+  }
+
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--error);
+    flex: 0 0 auto;
+  }
+  .dot.ok { background: var(--accent); }
+
+  select, button, textarea {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    outline: none;
+  }
+
+  select { max-width: 300px; cursor: pointer; }
+  select:focus, textarea:focus { border-color: var(--accent); }
+
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.ghost { background: transparent; }
+  button.active { border-color: var(--accent); color: var(--accent); }
+
+  /* One line of facts about the selected model. This is the thing that was
+     missing when a model was loaded but invisible. */
+  .modelinfo {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .modelinfo b { color: var(--accent); font-weight: 600; }
+  .modelinfo .warn { color: var(--error); }
+
+  .spacer { flex: 1 1 auto; }
+
+  main {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 18px 0;
+    scroll-behavior: smooth;
+  }
+
+  .msg {
+    margin: 0 0 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .who {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .msg.user .who { color: var(--accent2); }
+  .msg.assistant .who { color: var(--accent); }
+
+  .body {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    line-height: 1.55;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .body {
+    background: var(--panel2);
+    white-space: pre-wrap;
+  }
+
+  /* ---- rendered markdown ---- */
+  .body p { margin: 0 0 9px; }
+  .body > *:last-child { margin-bottom: 0; }
+  .body ul, .body ol { margin: 6px 0 9px; padding-left: 22px; }
+  .body li { margin: 2px 0; }
+  .body li > p { margin: 0; }
+  .body h1, .body h2, .body h3, .body h4, .body h5, .body h6 {
+    margin: 14px 0 7px;
+    font-size: 1.02em;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+  .body h1 { font-size: 1.22em; }
+  .body h2 { font-size: 1.12em; }
+  .body blockquote {
+    margin: 9px 0;
+    padding-left: 11px;
+    border-left: 2px solid var(--border);
+    color: var(--muted);
+  }
+  .body hr { border: none; border-top: 1px solid var(--border); margin: 13px 0; }
+  .body a { color: var(--accent2); text-decoration: underline; text-underline-offset: 2px; }
+
+  .body code {
+    background: rgba(0, 0, 0, 0.28);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 13px;
+    color: var(--accent);
+  }
+
+  .body pre {
+    background: #232a2e;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+  .body pre code {
+    background: none;
+    padding: 0;
+    color: var(--fg);
+  }
+
+  /* A copy button is the single most used action against a coding model. */
+  .codeblock { position: relative; }
+  .codeblock pre { margin: 10px 0; }
+  .codeblock .copy {
+    position: absolute;
+    top: 14px;
+    right: 6px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    background: var(--panel2);
+    opacity: 0;
+    transition: opacity 0.12s;
+    /* Selecting a message must not pick up the word "copy". */
+    user-select: none;
+  }
+  .codeblock:hover .copy, .codeblock .copy:focus-visible { opacity: 1; }
+  .codeblock .copy.done { color: var(--accent); border-color: var(--accent); opacity: 1; }
+
+  /* ---- thinking ---- */
+  details.thinking { margin-bottom: 2px; }
+  details.thinking summary {
+    cursor: pointer;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    list-style: none;
+    user-select: none;
+  }
+  details.thinking summary::-webkit-details-marker { display: none; }
+  details.thinking summary::before {
+    content: "\25B8";
+    display: inline-block;
+    width: 12px;
+    transition: transform 0.12s;
+  }
+  details.thinking[open] summary::before { transform: rotate(90deg); }
+  details.thinking summary:hover { color: var(--accent); }
+  details.thinking .thinkbody {
+    margin: 7px 0 9px;
+    padding: 2px 0 2px 11px;
+    border-left: 2px solid var(--border);
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .meta {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .meta .ctx { opacity: 0.85; }
+
+  .cursor::after {
+    content: "\258A";
+    color: var(--accent);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  footer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border);
+    padding: 12px 0 16px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+
+  textarea {
+    flex: 1 1 auto;
+    resize: none;
+    min-height: 46px;
+    max-height: 220px;
+    line-height: 1.45;
+    padding: 12px 14px;
+  }
+
+  #status {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 0 0 8px;
+    min-height: 14px;
+  }
+  #status.error { color: var(--error); }
+
+  .hint { font-size: 11px; color: var(--muted); }
+
+  /* ---- parameter panel ---- */
+  #settings {
+    display: none;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  #settings.open { display: flex; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .field input, .field textarea {
+    width: 108px;
+    padding: 6px 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); }
+  .field.wide { flex: 1 1 100%; }
+  .field.wide textarea { width: 100%; min-height: 52px; resize: vertical; }
+
+  .field.check { flex-direction: row; align-items: center; gap: 8px; }
+  .field.check input { width: auto; }
+  .field.check label { text-transform: none; letter-spacing: 0.02em; font-size: 12px; }
+  .field[hidden] { display: none; }
+
+  /* ---- attachments ---- */
+  #chips { display: none; flex-wrap: wrap; gap: 6px; padding: 9px 0 0; }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 6px 4px 10px;
+    font-size: 11px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+  .chip b { font-weight: 600; color: var(--accent); }
+  .chip .muted { color: var(--muted); }
+  .chip-x {
+    padding: 0 4px;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .chip-x:hover { color: var(--error); border: none; }
+  .chip-hint { align-self: center; font-size: 11px; color: var(--muted); }
+
+  #drop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: rgba(45, 53, 59, 0.86);
+    border: 2px dashed var(--accent);
+    border-radius: 12px;
+    pointer-events: none;
+  }
+  #drop.show { display: flex; }
+
+  /* ---- compact mode: the widget window ---- */
+  html.widget body { max-width: none; padding: 0 10px; font-size: 13px; }
+  html.widget header { gap: 8px; padding: 9px 0 8px; }
+  html.widget .brand { display: none; }
+  html.widget .modelinfo { display: none; }
+  html.widget select { width: 182px; max-width: 182px; font-size: 12px; padding: 5px 7px; }
+  html.widget button { font-size: 12px; padding: 5px 8px; }
+  html.widget main { padding: 12px 0; }
+  html.widget .msg { margin-bottom: 13px; }
+  html.widget .body { padding: 9px 11px; font-size: 13px; }
+  html.widget .body pre { padding: 9px; }
+  html.widget #settings { gap: 10px; padding: 10px 0; }
+  html.widget .field input { width: 92px; }
+  html.widget footer { padding: 9px 0 11px; gap: 7px; }
+  html.widget textarea { min-height: 40px; padding: 9px 11px; font-size: 13px; overflow-y: hidden; }
+  /* Stop only exists while something is generating — it costs input width. */
+  html.widget #stop[disabled] { display: none; }
+  html.widget #regen[disabled] { display: none; }
+  /* Empty state: the one thing you need to know about this window. */
+  html.widget main:empty::after {
+    content: "SUPER + A shows or hides this window";
+    display: block;
+    padding-top: 42%;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">OLLAMA</span>
+  <span class="dot" id="dot" title="server status"></span>
+  <select id="model" title="model"></select>
+  <span class="modelinfo" id="modelinfo"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="gear" title="Model parameters">Parameters</button>
+  <button class="ghost" id="clear" title="Clear the conversation">Clear</button>
+</header>
+
+<section id="settings">
+  <div class="field">
+    <label for="temperature">temperature</label>
+    <input id="temperature" type="number" min="0" max="2" step="0.05">
+  </div>
+  <div class="field">
+    <label for="top_p">top_p</label>
+    <input id="top_p" type="number" min="0" max="1" step="0.05">
+  </div>
+  <div class="field">
+    <label for="num_ctx">context</label>
+    <input id="num_ctx" type="number" min="512" max="262144" step="512">
+  </div>
+  <div class="field">
+    <label for="num_predict">max tokens</label>
+    <input id="num_predict" type="number" min="-1" step="16">
+  </div>
+  <div class="field">
+    <label for="repeat_penalty">repeat penalty</label>
+    <input id="repeat_penalty" type="number" min="0.5" max="2" step="0.05">
+  </div>
+  <div class="field">
+    <label for="num_thread">threads (0 = auto)</label>
+    <input id="num_thread" type="number" min="0" max="64" step="1">
+  </div>
+  <div class="field check" id="thinkfield" hidden>
+    <input id="think" type="checkbox">
+    <label for="think">show thinking</label>
+  </div>
+  <div class="field wide">
+    <label for="system">system prompt — empty uses the model's own</label>
+    <textarea id="system" placeholder="e.g. You are a helpful assistant running locally. Be brief."></textarea>
+  </div>
+</section>
+
+<main id="chat"></main>
+
+<div id="status"></div>
+
+<div id="chips"></div>
+
+<footer>
+  <button class="ghost" id="attach" title="Attach a file, a PDF, or a screenshot">Attach</button>
+  <textarea id="input" rows="1" placeholder="Ask something…  (Enter sends, Shift+Enter newline)"></textarea>
+  <button id="regen" title="Ask again, discarding the last answer" disabled>Retry</button>
+  <button id="send">Send</button>
+  <button id="stop" disabled>Stop</button>
+</footer>
+
+<input type="file" id="file" multiple hidden
+       accept=".txt,.md,.markdown,.csv,.json,.yaml,.yml,.log,.py,.js,.mjs,.ts,.tsx,.jsx,.html,.css,.scss,.sh,.bash,.c,.h,.cpp,.hpp,.java,.kt,.kts,.xml,.ini,.conf,.toml,.sql,.rs,.go,.rb,.php,.tex,application/pdf,image/*">
+
+<div id="drop">Drop files to attach</div>
+
+<script>
+const API = "http://127.0.0.1:11434";
+const chatEl = document.getElementById("chat");
+const inputEl = document.getElementById("input");
+const sendEl = document.getElementById("send");
+const stopEl = document.getElementById("stop");
+const regenEl = document.getElementById("regen");
+const clearEl = document.getElementById("clear");
+const modelEl = document.getElementById("model");
+const modelInfoEl = document.getElementById("modelinfo");
+const statusEl = document.getElementById("status");
+const dotEl = document.getElementById("dot");
+const gearEl = document.getElementById("gear");
+const settingsEl = document.getElementById("settings");
+const attachEl = document.getElementById("attach");
+const fileEl = document.getElementById("file");
+const chipsEl = document.getElementById("chips");
+const dropEl = document.getElementById("drop");
+const thinkFieldEl = document.getElementById("thinkfield");
+
+const FIELDS = ["temperature", "top_p", "num_ctx", "num_predict", "repeat_penalty", "num_thread", "system"];
+const inputs = Object.fromEntries(FIELDS.map(id => [id, document.getElementById(id)]));
+const thinkEl = document.getElementById("think");
+
+let messages = [];      // [{role, content, display?, el?}]
+let controller = null;  // AbortController for the in-flight reply
+let models = [];        // [{name, size, params, quant, family}]
+let caps = [];          // capabilities of the selected model
+let modelSig = "";      // to avoid rebuilding the <select> every poll
+
+// Generation parameters, sent as `options` on every request. Changing one
+// takes effect on the next message — no model reload, no service restart.
+const DEFAULTS = {
+  temperature: 0.7,
+  top_p: 0.9,
+  num_ctx: 4096,
+  num_predict: -1,        // -1 = keep going until the model stops by itself
+  repeat_penalty: 1.1,
+  num_thread: 0,          // 0 = let Ollama choose (it picks physical cores)
+  system: "",             // empty = the model's own built-in system prompt
+  think: true,            // only sent to models that advertise the capability
+};
+const SETTINGS_KEY = "ollama-web-settings";
+let settings = { ...DEFAULTS };
+
+function loadSettings() {
+  try {
+    settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+  } catch (e) {
+    settings = { ...DEFAULTS };
+  }
+  for (const id of FIELDS) inputs[id].value = settings[id];
+  thinkEl.checked = settings.think !== false;
+}
+
+// Reads whatever is currently in the panel. Called before every send, so a
+// value typed but not yet blurred still applies to that message.
+function readSettings() {
+  for (const id of FIELDS) {
+    settings[id] = id === "system" ? inputs[id].value : Number(inputs[id].value);
+  }
+  for (const id of ["temperature", "top_p", "num_ctx", "num_predict", "repeat_penalty", "num_thread"]) {
+    // An empty field would otherwise be sent as NaN, which Ollama rejects.
+    if (!Number.isFinite(settings[id])) settings[id] = DEFAULTS[id];
+    inputs[id].value = settings[id];
+  }
+  settings.think = thinkEl.checked;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+gearEl.addEventListener("click", () => {
+  settingsEl.classList.toggle("open");
+  gearEl.classList.toggle("active");
+});
+for (const id of FIELDS) inputs[id].addEventListener("change", readSettings);
+thinkEl.addEventListener("change", readSettings);
+
+/* ---------- attachments ---------- */
+
+// The model is text-only, so an attachment is turned into text before it is
+// sent: code and plain files are read in the browser, PDFs and images go
+// through the local server (pdftotext / tesseract). Nothing is uploaded
+// anywhere — /extract is this same loopback server.
+const TEXT_FILE = /\.(txt|md|markdown|csv|json|ya?ml|log|py|js|mjs|ts|tsx|jsx|html|css|scss|sh|bash|zsh|c|h|cc|cpp|hpp|java|kt|kts|xml|ini|conf|toml|sql|rs|go|rb|php|tex)$/i;
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+let attachments = [];   // [{name, text, chars, note, truncated}]
+
+function fileKind(file) {
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "pdf";
+  if (file.type.startsWith("image/")) return "image";
+  if (TEXT_FILE.test(file.name) || file.type.startsWith("text/")) return "text";
+  return null;
+}
+
+async function extractViaServer(file, kind) {
+  const r = await fetch("/extract?kind=" + kind, { method: "POST", body: file });
+  if (!r.ok) {
+    let message = "HTTP " + r.status;
+    try { message = (await r.json()).error || message; } catch (e) { /* not json */ }
+    throw new Error(message);
+  }
+  return r.json();
+}
+
+function pushAttachment(name, text, note, truncated) {
+  const clean = (text || "").trim();
+  attachments.push({
+    name,
+    text: clean,
+    chars: clean.length,
+    note: note || "",
+    truncated: !!truncated,
+  });
+  renderChips();
+}
+
+function renderChips() {
+  chipsEl.innerHTML = "";
+  attachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = "<b>" + escapeHtml(a.name) + "</b><span class=\"muted\">" +
+      a.chars.toLocaleString() + " chars" + (a.truncated ? ", truncated" : "") +
+      "</span>";
+    const x = document.createElement("button");
+    x.className = "chip-x";
+    x.textContent = "\u00d7";
+    x.title = "Remove";
+    x.addEventListener("click", () => {
+      attachments.splice(i, 1);
+      renderChips();
+    });
+    chip.appendChild(x);
+    chipsEl.appendChild(chip);
+  });
+
+  // The default context is 4096 tokens (~6000 chars of English). A big
+  // attachment plus a long conversation will silently push the oldest turns
+  // out, so say so while it is still cheap to fix.
+  const total = attachments.reduce((n, a) => n + a.chars, 0);
+  if (total > 5000) {
+    const hint = document.createElement("span");
+    hint.className = "chip-hint";
+    hint.textContent = "large — raise num_ctx if answers get cut off";
+    chipsEl.appendChild(hint);
+  }
+
+  chipsEl.style.display = attachments.length ? "flex" : "none";
+}
+
+async function addFiles(files) {
+  let problem = "";
+  for (const file of files) {
+    const kind = fileKind(file);
+    if (!kind) {
+      problem = "Unsupported file: " + file.name;
+      continue;
+    }
+
+    if (kind === "text") {
+      if (file.size > MAX_TEXT_BYTES) {
+        problem = file.name + " is too large (2 MB of text max)";
+        continue;
+      }
+      pushAttachment(file.name, await file.text(), "");
+      continue;
+    }
+
+    setStatus("Reading " + file.name + "\u2026");
+    try {
+      const data = await extractViaServer(file, kind);
+      if (!data.text) {
+        problem = file.name + ": " + (data.note || "nothing readable found");
+        continue;
+      }
+      pushAttachment(file.name, data.text, data.note, data.truncated);
+    } catch (e) {
+      problem = file.name + ": " + e.message;
+    }
+  }
+  setStatus(problem, !!problem);
+}
+
+// The text the model actually receives: a labelled, fenced block per file.
+function attachmentBlock() {
+  return attachments.map(a => {
+    const meta = [a.chars.toLocaleString() + " chars"];
+    if (a.truncated) meta.push("truncated");
+    if (a.note) meta.push(a.note);
+    return "[" + a.name + " \u2014 " + meta.join(", ") + "]\n```\n" + a.text + "\n```";
+  }).join("\n\n");
+}
+
+attachEl.addEventListener("click", () => fileEl.click());
+fileEl.addEventListener("change", () => {
+  if (fileEl.files.length) addFiles(fileEl.files);
+  fileEl.value = "";
+});
+
+// Paste a screenshot straight into the conversation.
+document.addEventListener("paste", e => {
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+  const files = items.filter(i => i.kind === "file")
+    .map(i => i.getAsFile())
+    .filter(Boolean);
+  if (files.length) {
+    e.preventDefault();
+    addFiles(files);
+  }
+});
+
+// Drag and drop anywhere on the page.
+let dragDepth = 0;
+document.addEventListener("dragenter", e => {
+  e.preventDefault();
+  dragDepth++;
+  dropEl.classList.add("show");
+});
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropEl.classList.remove("show");
+});
+document.addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropEl.classList.remove("show");
+  if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+
+/* ---------- helpers ---------- */
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+// Plain text with its newlines kept: used for what the user typed, so their
+// own line breaks are not reinterpreted as markdown.
+function renderPlain(text) {
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+function codeBlockHtml(code) {
+  return '<div class="codeblock"><button class="copy" title="Copy code">copy</button>' +
+    "<pre><code>" + code + "</code></pre></div>";
+}
+
+// Small markdown renderer: fenced code, inline code, headings, lists,
+// blockquotes, rules, bold, italic, links. Everything is escaped first, so a
+// model reply can never inject markup into this page.
+function renderMarkdown(text) {
+  const blocks = [];
+  const inlines = [];
+
+  let out = escapeHtml(text);
+
+  // 1. fenced code first, so nothing inside it is interpreted
+  out = out.replace(/```[ \t]*([\w+#.-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push(code.replace(/\n$/, ""));
+    return "\u0000C" + (blocks.length - 1) + "\u0000";
+  });
+  // an unterminated fence while streaming: show it as code anyway
+  out = out.replace(/```[ \t]*([\w+#.-]*)\n?([\s\S]*)$/, (_, lang, code) => {
+    blocks.push(code);
+    return "\u0000C" + (blocks.length - 1) + "\u0000";
+  });
+
+  // 2. inline code
+  out = out.replace(/`([^`\n]+)`/g, (_, code) => {
+    inlines.push(code);
+    return "\u0000I" + (inlines.length - 1) + "\u0000";
+  });
+
+  // 3. block structure, line by line
+  const html = [];
+  let list = null;
+  let para = [];
+
+  const flushPara = () => {
+    if (para.length) { html.push("<p>" + para.join("<br>") + "</p>"); para = []; }
+  };
+  const flushList = () => {
+    if (!list) return;
+    html.push("<" + list.type + ">" +
+      list.items.map(i => "<li>" + i + "</li>").join("") +
+      "</" + list.type + ">");
+    list = null;
+  };
+
+  for (const rawLine of out.split("\n")) {
+    const line = rawLine.replace(/[ \t]+$/, "");
+
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+
+    const only = line.match(/^\u0000C(\d+)\u0000$/);
+    if (only) {
+      flushPara(); flushList();
+      html.push(codeBlockHtml(blocks[+only[1]]));
+      continue;
+    }
+
+    let m;
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      flushPara(); flushList();
+      const level = m[1].length;
+      html.push("<h" + level + ">" + m[2] + "</h" + level + ">");
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushPara(); flushList(); html.push("<hr>"); continue;
+    }
+    if ((m = line.match(/^\s*&gt;\s?(.*)$/))) {
+      flushPara(); flushList();
+      html.push("<blockquote>" + m[1] + "</blockquote>");
+      continue;
+    }
+    if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; }
+      list.items.push(m[1]);
+      continue;
+    }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; }
+      list.items.push(m[1]);
+      continue;
+    }
+
+    flushList();
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+
+  let result = html.join("\n");
+
+  // 4. inline formatting, never across a line break
+  result = result.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  result = result.replace(/(^|[\s(>])\*([^*\n]+)\*(?=$|[\s).,;:!?<])/g, "$1<em>$2</em>");
+  result = result.replace(/(^|[\s(>])_([^_\n]+)_(?=$|[\s).,;:!?<])/g, "$1<em>$2</em>");
+  result = result.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>');
+
+  // 5. put the inline code back
+  result = result.replace(/\u0000I(\d+)\u0000/g, (_, i) => "<code>" + inlines[+i] + "</code>");
+  return result;
+}
+
+// Thinking reaches us in two different shapes depending on the model:
+//   * a separate `message.thinking` field (models that advertise `thinking`)
+//   * inline " thinking ... </think>" text inside `message.content` (raw GGUFs)
+// Handle both, and cope with the closing tag not having arrived yet.
+function splitThinking(raw) {
+  const open = raw.indexOf("\u003cthink\u003e");
+  if (open === -1) return { thinking: "", content: raw };
+  const close = raw.indexOf("\u003c/think\u003e", open);
+  if (close === -1) {
+    return { thinking: raw.slice(open + 7).trim(), content: raw.slice(0, open) };
+  }
+  return {
+    thinking: raw.slice(open + 7, close).trim(),
+    content: (raw.slice(0, open) + raw.slice(close + 8)).trim(),
+  };
+}
+
+function setStatus(text, isError = false) {
+  statusEl.textContent = text;
+  statusEl.className = isError ? "error" : "";
+}
+
+function nearBottom() {
+  return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 120;
+}
+
+function addMessage(role, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = role === "user" ? "you" : "model";
+
+  const think = document.createElement("details");
+  think.className = "thinking";
+  think.hidden = true;
+  const summary = document.createElement("summary");
+  const thinkBody = document.createElement("div");
+  thinkBody.className = "thinkbody";
+  think.appendChild(summary);
+  think.appendChild(thinkBody);
+
+  const body = document.createElement("div");
+  body.className = "body";
+  body.innerHTML = role === "user" ? renderPlain(text) : renderMarkdown(text);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+
+  wrap.appendChild(who);
+  if (role === "assistant") wrap.appendChild(think);
+  wrap.appendChild(body);
+  wrap.appendChild(meta);
+  chatEl.appendChild(wrap);
+  chatEl.scrollTop = chatEl.scrollHeight;
+
+  return { wrap, body, meta, think, summary, thinkBody };
+}
+
+// Copy buttons are attached by delegation so they survive re-rendering
+// during streaming.
+chatEl.addEventListener("click", e => {
+  const btn = e.target.closest(".copy");
+  if (!btn) return;
+  const code = btn.parentElement.querySelector("code");
+  if (!code) return;
+  const text = code.textContent;
+  const done = () => {
+    btn.textContent = "copied";
+    btn.classList.add("done");
+    setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("done"); }, 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, fallbackCopy);
+  } else {
+    fallbackCopy();
+  }
+  function fallbackCopy() {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch (err) { /* ignore */ }
+    document.body.removeChild(ta);
+  }
+});
+
+/* ---------- conversation persistence ---------- */
+
+// The widget and the browser tab keep separate histories: they are two places
+// you might be talking from, and merging them would be confusing.
+const HISTORY_KEY = "ollama-web-history" +
+  (document.documentElement.classList.contains("widget") ? "-widget" : "");
+
+function saveHistory() {
+  try {
+    // Attachments can be large; the stored copy is trimmed so the history
+    // never fills the quota. The live conversation keeps the full text.
+    const slim = messages.slice(-40).map(m => ({
+      role: m.role,
+      content: m.content.slice(0, 4000),
+      display: (m.display || m.content).slice(0, 4000),
+      thinking: (m.thinking || "").slice(0, 4000),
+    }));
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
+  } catch (e) {
+    // Quota or private mode — the chat still works, it just will not survive.
+  }
+}
+
+function restoreHistory() {
+  let saved;
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY) || "[]";
+    saved = JSON.parse(raw);
+  } catch (e) {
+    return;
+  }
+  if (!Array.isArray(saved)) return;
+  for (const m of saved) {
+    if (!m || typeof m.content !== "string" || !m.content) continue;
+    const role = m.role === "user" ? "user" : "assistant";
+    const shown = m.display || m.content;
+    const node = addMessage(role, shown);
+    if (role === "assistant" && m.thinking) {
+      node.think.hidden = false;
+      node.thinkBody.textContent = m.thinking;
+      node.summary.textContent = "thinking \u00b7 " + m.thinking.length.toLocaleString() + " chars";
+    }
+    messages.push({ role, content: m.content, display: shown, thinking: m.thinking || "", el: node.wrap });
+  }
+  if (messages.length) chatEl.scrollTop = chatEl.scrollHeight;
+  updateButtons();
+}
+
+/* ---------- models ---------- */
+
+function describe(m) {
+  const bits = [];
+  if (m.params) bits.push(m.params);
+  if (m.quant) bits.push(m.quant);
+  if (m.size) bits.push((m.size / 1e9).toFixed(1) + " GB");
+  return bits.join(" \u00b7 ");
+}
+
+async function loadModels() {
+  try {
+    const r = await fetch(API + "/api/tags");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+
+    models = (data.models || []).map(m => ({
+      name: m.name,
+      size: m.size || 0,
+      params: (m.details && m.details.parameter_size) || "",
+      quant: (m.details && m.details.quantization_level) || "",
+      family: (m.details && m.details.family) || "",
+    }));
+
+    if (!models.length) {
+      modelEl.innerHTML = '<option value="">no models installed</option>';
+      modelInfoEl.textContent = "";
+      setStatus("Ollama is running but has no models. Try: ollama pull qwen3.5:2b", true);
+      return;
+    }
+
+    // Only touch the <select> when the list actually changed — otherwise the
+    // 15s poll would close the dropdown while it is open.
+    const sig = models.map(m => m.name + "|" + m.size).join(",");
+    if (sig !== modelSig) {
+      const keep = modelEl.value || localStorage.getItem("ollama-web-model");
+      modelEl.innerHTML = models.map(m =>
+        '<option value="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + "</option>"
+      ).join("");
+      modelSig = sig;
+      if (keep && models.some(m => m.name === keep)) modelEl.value = keep;
+      await loadModelInfo();
+    }
+
+    dotEl.className = "dot ok";
+    setStatus("");
+  } catch (e) {
+    dotEl.className = "dot";
+    setStatus("Cannot reach Ollama at " + API + " — is the service running? (" + e.message + ")", true);
+  }
+}
+
+async function loadModelInfo() {
+  const name = modelEl.value;
+  if (!name) { modelInfoEl.textContent = ""; return; }
+
+  const m = models.find(x => x.name === name);
+  caps = [];
+
+  try {
+    const r = await fetch(API + "/api/show", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: name }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      caps = d.capabilities || [];
+    }
+  } catch (e) {
+    caps = [];
+  }
+
+  // "thinking" is a real capability: sending `think` to a model without it is
+  // a hard HTTP 400, so the checkbox is only offered when it is advertised.
+  const canThink = caps.includes("thinking");
+  thinkFieldEl.hidden = !canThink;
+
+  const bits = [];
+  if (m && m.params) bits.push("<b>" + escapeHtml(m.params) + "</b>");
+  if (m && m.quant && m.quant !== "unknown") bits.push(escapeHtml(m.quant));
+  if (m && m.size) bits.push((m.size / 1e9).toFixed(1) + " GB");
+  if (caps.length) bits.push(escapeHtml(caps.filter(c => c !== "completion").join(", ") || "text"));
+  modelInfoEl.innerHTML = bits.join(" \u00b7 ");
+}
+
+modelEl.addEventListener("change", () => {
+  localStorage.setItem("ollama-web-model", modelEl.value);
+  loadModelInfo();
+});
+
+/* ---------- sending ---------- */
+
+// Renders a streaming reply without re-parsing the whole text on every chunk.
+function makeRenderer(node) {
+  let queued = false;
+  let pending = "";
+  return {
+    push(text) {
+      pending = text;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        const stick = nearBottom();
+        node.body.innerHTML = renderMarkdown(pending);
+        if (stick) chatEl.scrollTop = chatEl.scrollHeight;
+      });
+    },
+    flush(text) {
+      pending = text;
+      node.body.innerHTML = renderMarkdown(text);
+    },
+  };
+}
+
+async function runCompletion() {
+  const reply = addMessage("assistant", "");
+  reply.body.classList.add("cursor");
+  reply.meta.textContent = "thinking\u2026";
+
+  controller = new AbortController();
+  updateButtons();
+  setStatus("");
+
+  const renderer = makeRenderer(reply);
+  let contentBuf = "";
+  let thinkBuf = "";
+  let stats = null;
+  let startedAt = 0;
+  let chunks = 0;
+
+  try {
+    // A system prompt typed in the panel replaces the model's own; leaving it
+    // empty keeps the built-in one. Sent per request, so `messages` stays clean.
+    const sys = (settings.system || "").trim();
+    const outbound = sys ? [{ role: "system", content: sys }, ...messages] : messages;
+
+    const options = {
+      temperature: settings.temperature,
+      top_p: settings.top_p,
+      num_ctx: settings.num_ctx,
+      num_predict: settings.num_predict,
+      repeat_penalty: settings.repeat_penalty,
+    };
+    // 0 means "let Ollama decide"; sending 0 would be rejected.
+    if (settings.num_thread > 0) options.num_thread = settings.num_thread;
+
+    const body = {
+      model: modelEl.value,
+      messages: outbound,
+      stream: true,
+      options,
+    };
+    // Only models that advertise the capability accept this parameter.
+    if (caps.includes("thinking") && settings.think !== false) body.think = true;
+
+    const r = await fetch(API + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let detail = "HTTP " + r.status;
+      try {
+        const j = await r.json();
+        if (j && j.error) detail = j.error;
+      } catch (e) { /* not json */ }
+      throw new Error(detail);
+    }
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+
+        let chunk;
+        try { chunk = JSON.parse(line); } catch (e) { continue; }
+        if (chunk.error) throw new Error(chunk.error);
+
+        if (chunk.message) {
+          if (chunk.message.thinking) {
+            thinkBuf += chunk.message.thinking;
+            const stick = nearBottom();
+            reply.think.hidden = false;
+            reply.thinkBody.textContent = thinkBuf;
+            reply.summary.textContent = "thinking \u00b7 " + thinkBuf.length.toLocaleString() + " chars";
+            if (stick) chatEl.scrollTop = chatEl.scrollHeight;
+          }
+          if (chunk.message.content) {
+            contentBuf += chunk.message.content;
+            if (!startedAt) startedAt = performance.now();
+            chunks++;
+            const split = splitThinking(contentBuf);
+            const allThink = (thinkBuf + (split.thinking ? (thinkBuf ? "\n\n" : "") + split.thinking : "")).trim();
+            if (allThink) {
+              reply.think.hidden = false;
+              reply.thinkBody.textContent = allThink;
+              reply.summary.textContent = "thinking \u00b7 " + allThink.length.toLocaleString() + " chars";
+            }
+            renderer.push(split.content);
+          }
+        }
+        if (chunk.done) stats = chunk;
+      }
+    }
+
+    const split = splitThinking(contentBuf);
+    const allThink = (thinkBuf + (split.thinking ? (thinkBuf ? "\n\n" : "") + split.thinking : "")).trim();
+    renderer.flush(split.content);
+
+    // A thinking model can spend its whole budget before it starts answering.
+    // Say so instead of leaving an empty bubble.
+    if (!split.content.trim()) {
+      reply.body.innerHTML = allThink
+        ? '<span class="hint">ran out of tokens while thinking \u2014 raise max tokens</span>'
+        : '<span class="hint">(empty reply)</span>';
+    }
+
+    messages.push({
+      role: "assistant",
+      content: split.content,
+      display: split.content,
+      thinking: allThink,
+      el: reply.wrap,
+    });
+    saveHistory();
+
+    // Report what it cost, including how much of the context window is gone.
+    const metaBits = [];
+    if (stats && stats.eval_count) {
+      const tps = stats.eval_duration ? stats.eval_count / (stats.eval_duration / 1e9) : 0;
+      metaBits.push(stats.eval_count + " tokens");
+      if (tps) metaBits.push(tps.toFixed(1) + " tok/s");
+    }
+    if (stats && stats.prompt_eval_count) {
+      const used = (stats.prompt_eval_count || 0) + (stats.eval_count || 0);
+      metaBits.push('<span class="ctx">' + used.toLocaleString() + " / " +
+        Number(settings.num_ctx).toLocaleString() + " ctx</span>");
+    }
+    reply.meta.innerHTML = metaBits.join(" \u00b7 ");
+    if (allThink) {
+      reply.summary.textContent = "thinking \u00b7 " + allThink.length.toLocaleString() + " chars";
+    }
+
+    if (stats && stats.prompt_eval_count && stats.prompt_eval_count + (stats.eval_count || 0) > settings.num_ctx * 0.9) {
+      setStatus("Context is nearly full — the oldest turns will start dropping. Raise context or press Clear.", true);
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      reply.meta.textContent = "stopped";
+      const split = splitThinking(contentBuf);
+      if (split.content) {
+        messages.push({
+          role: "assistant", content: split.content, display: split.content,
+          thinking: thinkBuf, el: reply.wrap,
+        });
+      }
+      saveHistory();
+    } else {
+      reply.meta.textContent = "";
+      setStatus("Error: " + e.message, true);
+    }
+  } finally {
+    reply.body.classList.remove("cursor");
+    controller = null;
+    updateButtons();
+    inputEl.focus();
+  }
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if ((!text && !attachments.length) || controller) return;
+  if (!modelEl.value) { setStatus("Pick a model first.", true); return; }
+
+  readSettings();
+
+  // The model gets the file text; the screen gets a readable summary.
+  const block = attachmentBlock();
+  const outgoing = block && text ? block + "\n\n" + text : (block || text);
+  const shown = text + (attachments.length
+    ? (text ? "\n\n" : "") + "(attached: " + attachments.map(a => a.name).join(", ") + ")"
+    : "");
+
+  const node = addMessage("user", shown);
+  messages.push({ role: "user", content: outgoing, display: shown, el: node.wrap });
+  saveHistory();
+
+  inputEl.value = "";
+  attachments = [];
+  renderChips();
+  autoGrow();
+
+  await runCompletion();
+}
+
+// Retry: drop the trailing answer(s) and ask the same question again.
+async function regenerate() {
+  if (controller || !messages.length) return;
+  while (messages.length && messages[messages.length - 1].role === "assistant") {
+    const m = messages.pop();
+    if (m.el && m.el.parentNode) m.el.parentNode.removeChild(m.el);
+  }
+  if (!messages.length || messages[messages.length - 1].role !== "user") return;
+  saveHistory();
+  await runCompletion();
+}
+
+/* ---------- input behaviour ---------- */
+
+function autoGrow() {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 220) + "px";
+}
+
+function updateButtons() {
+  const busy = !!controller;
+  sendEl.disabled = busy;
+  stopEl.disabled = !busy;
+  regenEl.disabled = busy || !messages.some(m => m.role === "assistant");
+}
+
+inputEl.addEventListener("input", autoGrow);
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+sendEl.addEventListener("click", send);
+stopEl.addEventListener("click", () => controller && controller.abort());
+regenEl.addEventListener("click", regenerate);
+clearEl.addEventListener("click", () => {
+  messages = [];
+  chatEl.innerHTML = "";
+  localStorage.removeItem(HISTORY_KEY);
+  setStatus("");
+  updateButtons();
+  inputEl.focus();
+});
+
+// Escape stops a reply, like every other tool that streams.
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && controller) {
+    controller.abort();
+    e.preventDefault();
+  }
+});
+
+loadSettings();
+restoreHistory();
+if (document.documentElement.classList.contains("widget")) {
+  inputEl.placeholder = "Ask the local model\u2026";
+}
+loadModels();
+setInterval(loadModels, 15000);
+inputEl.focus();
+</script>
+</body>
+</html>
