@@ -466,6 +466,13 @@
 
 <script>
 const API = "http://127.0.0.1:11434";
+
+// How long Ollama should keep the model in RAM after a reply. The service may
+// be configured with a short default (a bare OLLAMA_KEEP_ALIVE number is read
+// as SECONDS), which evicts the model between messages and makes every prompt
+// pay a full reload. A per-request value overrides the service default.
+const KEEP_ALIVE = "10m";
+
 const chatEl = document.getElementById("chat");
 const inputEl = document.getElementById("input");
 const sendEl = document.getElementById("send");
@@ -1106,6 +1113,7 @@ async function runCompletion() {
       messages: outbound,
       stream: true,
       options,
+      keep_alive: KEEP_ALIVE,
     };
     // Only models that advertise the capability accept this parameter.
     if (caps.includes("thinking") && settings.think !== false) body.think = true;
